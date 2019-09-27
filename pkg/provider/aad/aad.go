@@ -645,15 +645,12 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 
 	// data is embeded javascript object
 	// <script><![CDATA[  $Config=......; ]]>
-	scanner := bufio.NewScanner(res.Body)
-	var startSAMLJson string
-	for scanner.Scan() {
-		scanLine := strings.TrimSpace(scanner.Text())
-		if strings.Contains(scanLine, "$Config") {
-			startSAMLJson = scanLine[strings.Index(scanLine, "$Config=")+8 : strings.LastIndex(scanLine, ";")]
-			break
-		}
+	startSAMLJson, err := getConfigString(res.Body)
+	if err != nil {
+		return samlAssertion, errors.Wrap(err, "startSAML response parse error")
 	}
+	logger.Debugf("startSAMLJson: %s", startSAMLJson)
+
 	var startSAMLResp startSAMLResponse
 	if err := json.Unmarshal([]byte(startSAMLJson), &startSAMLResp); err != nil {
 		return samlAssertion, errors.Wrap(err, "startSAML response unmarshal error")
@@ -676,15 +673,12 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 	}
 	// data is embeded javascript object
 	// <script><![CDATA[  $Config=......; ]]>
-	scanner = bufio.NewScanner(res.Body)
-	var loginPasswordJson string
-	for scanner.Scan() {
-		scanLine := strings.TrimSpace(scanner.Text())
-		if strings.Contains(scanLine, "$Config") {
-			loginPasswordJson = scanLine[strings.Index(scanLine, "$Config=")+8 : strings.LastIndex(scanLine, ";")]
-			break
-		}
+	loginPasswordJson, err := getConfigString(res.Body)
+	if err != nil {
+		return samlAssertion, errors.Wrap(err, "loginPassword response parse error")
 	}
+	logger.Debugf("loginPasswordJson: %s", loginPasswordJson)
+
 	var loginPasswordResp passwordLoginResponse
 	var loginPasswordSkipMfaResp SkipMfaResponse
 	if err := json.Unmarshal([]byte(loginPasswordJson), &loginPasswordResp); err != nil {
@@ -697,9 +691,9 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 	if err := json.Unmarshal([]byte(loginPasswordJson), &restartSAMLResp); err != nil {
 		return samlAssertion, errors.Wrap(err, "startSAML response unmarshal error")
 	}
-  if restartSAMLResp.URLGitHubFed != "" {
-			return samlAssertion, errors.Wrap(err, "login failed")
-  }
+	if restartSAMLResp.URLGitHubFed != "" {
+		return samlAssertion, errors.Wrap(err, "login failed")
+	}
 
 	// skip mfa
 	if loginPasswordSkipMfaResp.URLSkipMfaRegistration != "" {
@@ -759,7 +753,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		}
 
 		//  mfa end
-    for i:=0;; i++{
+		for i := 0; ; i++ {
 			mfaReq = mfaRequest{
 				AuthMethodID: mfaResp.AuthMethodID,
 				Method:       "EndAuth",
@@ -771,9 +765,9 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 				verifyCode := prompter.StringRequired("Enter verification code")
 				mfaReq.AdditionalAuthData = verifyCode
 			}
-      if mfaReq.AuthMethodID == "PhoneAppNotification" && i==0 {
-        fmt.Println("Phone approval required.")
-      }
+			if mfaReq.AuthMethodID == "PhoneAppNotification" && i == 0 {
+				fmt.Println("Phone approval required.")
+			}
 			mfaReqJson, err := json.Marshal(mfaReq)
 			if err != nil {
 				return samlAssertion, err
@@ -828,17 +822,13 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		}
 		// data is embeded javascript object
 		// <script><![CDATA[  $Config=......; ]]>
-		scanner = bufio.NewScanner(res.Body)
-		var ProcessAuthJson string
-		for scanner.Scan() {
-			scanLine := strings.TrimSpace(scanner.Text())
-			if strings.Contains(scanLine, "$Config") {
-				ProcessAuthJson = scanLine[strings.Index(scanLine, "$Config=")+8 : strings.LastIndex(scanLine, ";")]
-				break
-			}
+		processAuthJson, err := getConfigString(res.Body)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "ProcessAuth response parse error")
 		}
+		logger.Debugf("processAuthJson: %s", processAuthJson)
 		var processAuthResp processAuthResponse
-		if err := json.Unmarshal([]byte(ProcessAuthJson), &processAuthResp); err != nil {
+		if err := json.Unmarshal([]byte(processAuthJson), &processAuthResp); err != nil {
 			return samlAssertion, errors.Wrap(err, "ProcessAuth response unmarshal error")
 		}
 
@@ -950,15 +940,13 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 	resBodyStr := string(resBody)
 	if strings.Contains(resBodyStr, "urlSkipMfaRegistration") {
 		var samlAssertionSkipMfaResp SkipMfaResponse
-		var skipMfaJson string
-		responseList := strings.Split(resBodyStr, "<")
-		for _, line := range responseList {
 
-			if strings.Contains(line, "$Config") {
-				skipMfaJson = line[strings.Index(line, "$Config=")+8 : strings.LastIndex(line, ";")]
-				break
-			}
+		skipMfaJson,err  := getConfigString(strings.NewReader(strings.ReplaceAll(resBodyStr, "<", "\n")))
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "SAMLAssersion skip mfa response parse error")
 		}
+		logger.Debugf("skipMfaJson: %s", skipMfaJson)
+
 		if err := json.Unmarshal([]byte(skipMfaJson), &samlAssertionSkipMfaResp); err != nil {
 			return samlAssertion, errors.Wrap(err, "SAMLAssertion skip mfa response unmarshal error")
 		}
@@ -995,4 +983,34 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		return samlAssertion, fmt.Errorf("failed get SAMLAssersion")
 	}
 	return samlAssertion, nil
+}
+
+// <script><![CDATA[  $Config=......; ]]>
+// some case $Config=....; define multiple rows
+func getConfigString(reader io.Reader) (config string, err error) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		scanLine := strings.TrimSpace(scanner.Text())
+    // this case, $Config=...; is single rows
+		if strings.Contains(scanLine, "$Config") && strings.Contains(scanLine, ";") {
+			config = scanLine[strings.Index(scanLine, "$Config=")+8 : strings.LastIndex(scanLine, ";")]
+			break
+		}
+    // this case, $Config=...; is multi rows 
+		if strings.Contains(scanLine, "$Config") {
+			config = scanLine[strings.Index(scanLine, "$Config=")+8:]
+		}
+		if len(config) != 0 {
+			if strings.Contains(scanLine, ";") {
+				config = config + scanLine[:strings.LastIndex(scanLine, ";")]
+				break
+			}
+			config = config + scanLine
+		}
+	}
+	if strings.Contains(config, "urlPost") {
+		return config, nil
+	} else {
+		return config, fmt.Errorf("html parse error, not found valid $Config={}; data:" + config)
+	}
 }

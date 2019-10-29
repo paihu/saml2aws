@@ -665,14 +665,20 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 	loginValues.Set("ctx", startSAMLResp.SCtx)
 	loginValues.Set("login", loginDetails.Username)
 	loginValues.Set("passwd", loginDetails.Password)
-	passwordLoginRequest, err := http.NewRequest("POST", startSAMLResp.URLPost, strings.NewReader(loginValues.Encode()))
+
+	reqURL, err := url.Parse(startSAMLResp.URLPost)
+	if len(reqURL.Scheme) == 0 {
+		reqURL.Scheme = res.Request.URL.Scheme
+		reqURL.Host = res.Request.URL.Host
+	}
+	passwordLoginRequest, err := http.NewRequest("POST", reqURL.String(), strings.NewReader(loginValues.Encode()))
 	if err != nil {
-		return samlAssertion, errors.Wrap(err, "error retrieving login results")
+		return samlAssertion, errors.Wrap(err, "error retrieving login results1")
 	}
 	passwordLoginRequest.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	res, err = ac.client.Do(passwordLoginRequest)
 	if err != nil {
-		return samlAssertion, errors.Wrap(err, "error retrieving login results")
+		return samlAssertion, errors.Wrap(err, "error retrieving login results2")
 	}
 	// data is embeded javascript object
 	// <script><![CDATA[  $Config=......; ]]>
@@ -697,9 +703,9 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 	if err := json.Unmarshal([]byte(loginPasswordJson), &restartSAMLResp); err != nil {
 		return samlAssertion, errors.Wrap(err, "startSAML response unmarshal error")
 	}
-  if restartSAMLResp.URLGitHubFed != "" {
-			return samlAssertion, errors.Wrap(err, "login failed")
-  }
+	if restartSAMLResp.URLGitHubFed != "" {
+		return samlAssertion, errors.Wrap(err, "login failed")
+	}
 
 	// skip mfa
 	if loginPasswordSkipMfaResp.URLSkipMfaRegistration != "" {
@@ -759,7 +765,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		}
 
 		//  mfa end
-    for i:=0;; i++{
+		for i := 0; ; i++ {
 			mfaReq = mfaRequest{
 				AuthMethodID: mfaResp.AuthMethodID,
 				Method:       "EndAuth",
@@ -771,9 +777,9 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 				verifyCode := prompter.StringRequired("Enter verification code")
 				mfaReq.AdditionalAuthData = verifyCode
 			}
-      if mfaReq.AuthMethodID == "PhoneAppNotification" && i==0 {
-        fmt.Println("Phone approval required.")
-      }
+			if mfaReq.AuthMethodID == "PhoneAppNotification" && i == 0 {
+				fmt.Println("Phone approval required.")
+			}
 			mfaReqJson, err := json.Marshal(mfaReq)
 			if err != nil {
 				return samlAssertion, err
